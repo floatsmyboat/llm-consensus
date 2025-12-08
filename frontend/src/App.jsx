@@ -5,13 +5,19 @@ function App() {
   const [showConfig, setShowConfig] = useState(false)
   const [config, setConfig] = useState(null)
   const [prompt, setPrompt] = useState('')
+  const [uploadedFile, setUploadedFile] = useState(null)
+  const [fileContent, setFileContent] = useState(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('responses')
 
   useEffect(() => {
-    const savedConfig = localStorage.getItem('llm-consensus-config')
+    // Check if we should use session storage
+    const useSession = localStorage.getItem('llm-consensus-use-session') === 'true'
+    const storage = useSession ? sessionStorage : localStorage
+    
+    const savedConfig = storage.getItem('llm-consensus-config')
     if (savedConfig) {
       setConfig(JSON.parse(savedConfig))
     }
@@ -38,6 +44,35 @@ function App() {
     }
   }
 
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    setUploadedFile(file)
+    
+    // Read file content
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      setFileContent({
+        name: file.name,
+        type: file.type,
+        content: event.target.result
+      })
+    }
+    
+    // Read as text for text files, base64 for others
+    if (file.type.startsWith('text/') || file.type === 'application/json') {
+      reader.readAsText(file)
+    } else {
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const removeFile = () => {
+    setUploadedFile(null)
+    setFileContent(null)
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     
@@ -59,14 +94,21 @@ function App() {
         throw new Error('Please configure all participants and chairman in settings')
       }
 
+      const requestBody = { 
+        prompt, 
+        participants: participantConfigs, 
+        chairman: chairmanConfig 
+      }
+
+      // Add file content if available
+      if (fileContent) {
+        requestBody.file = fileContent
+      }
+
       const response = await fetch('http://localhost:8000/api/consensus', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          prompt, 
-          participants: participantConfigs, 
-          chairman: chairmanConfig 
-        })
+        body: JSON.stringify(requestBody)
       })
 
       if (!response.ok) {
@@ -91,9 +133,10 @@ function App() {
     return (
       <ConfigPage
         initialConfig={config}
-        onSave={(newConfig) => {
+        onSave={(newConfig, useSessionStorage) => {
           setConfig(newConfig)
-          localStorage.setItem('llm-consensus-config', JSON.stringify(newConfig))
+          const storage = useSessionStorage ? sessionStorage : localStorage
+          storage.setItem('llm-consensus-config', JSON.stringify(newConfig))
           setShowConfig(false)
         }}
         onCancel={() => setShowConfig(false)}
@@ -165,6 +208,44 @@ function App() {
               placeholder="Enter your question or prompt..."
               required
             />
+          </div>
+
+          <div className="form-group">
+            <label>Upload File (Optional)</label>
+            <div className="file-upload-area">
+              {!uploadedFile ? (
+                <label className="file-upload-label">
+                  <input
+                    type="file"
+                    onChange={handleFileUpload}
+                    style={{ display: 'none' }}
+                    accept=".txt,.md,.json,.csv,.pdf,.doc,.docx,.png,.jpg,.jpeg"
+                  />
+                  <div className="file-upload-placeholder">
+                    📎 Click to upload or drag file here
+                    <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem' }}>
+                      Supports: text, markdown, JSON, CSV, PDF, images
+                    </div>
+                  </div>
+                </label>
+              ) : (
+                <div className="file-uploaded">
+                  <div className="file-info">
+                    <span>📄 {uploadedFile.name}</span>
+                    <span style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
+                      ({(uploadedFile.size / 1024).toFixed(1)} KB)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={removeFile}
+                    className="btn-remove-file"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

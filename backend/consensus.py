@@ -4,7 +4,7 @@ import asyncio
 from typing import List, Dict, Any, Union
 
 class ConsensusEngine:
-    async def call_bedrock(self, model: str, prompt: str, api_key: str, region: str = "us-east-1", max_retries: int = 3) -> str:
+    async def call_bedrock(self, model: str, prompt: str, api_key: str, region: str = "us-east-1", max_retries: int = 3, image_data: str = None) -> str:
         """Call AWS Bedrock using API key authentication with inference profiles"""
         print(f"DEBUG: Calling AWS Bedrock - inference profile/model: {model}, region: {region}")
         
@@ -21,13 +21,38 @@ class ConsensusEngine:
         # Format request based on model family (check both profile and model name)
         model_lower = model.lower()
         if "anthropic.claude" in model_lower or "claude" in model_lower:
-            body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4096,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ]
-            }
+            # Claude supports vision
+            if image_data and image_data.startswith('data:image'):
+                # Extract media type and base64 data
+                media_type = image_data.split(';')[0].split(':')[1] if ':' in image_data else 'image/jpeg'
+                base64_data = image_data.split(',')[1] if ',' in image_data else image_data
+                
+                body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4096,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": base64_data
+                                }
+                            }
+                        ]
+                    }]
+                }
+            else:
+                body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4096,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ]
+                }
         elif "amazon.titan" in model_lower or "titan" in model_lower:
             body = {
                 "inputText": prompt,
@@ -147,7 +172,7 @@ class ConsensusEngine:
         
         raise Exception(f"Bedrock failed after {max_retries} attempts")
     
-    async def call_llm(self, config: Union[Dict, Any], prompt: str, max_retries: int = 3) -> str:
+    async def call_llm(self, config: Union[Dict, Any], prompt: str, max_retries: int = 3, image_data: str = None) -> str:
         """Call an LLM endpoint with the given prompt, with retry logic for rate limits"""
         # Handle both dict and Pydantic model
         if hasattr(config, 'endpoint'):
@@ -171,7 +196,7 @@ class ConsensusEngine:
             if not api_key:
                 raise Exception("Bedrock API key is required. Get one from AWS Console → Bedrock → API Keys")
             
-            return await self.call_bedrock(model, prompt, api_key, region, max_retries)
+            return await self.call_bedrock(model, prompt, api_key, region, max_retries, image_data)
         
         print(f"DEBUG: Calling LLM - endpoint: {endpoint}, model: {model}")
         
@@ -181,24 +206,60 @@ class ConsensusEngine:
         
         # Handle different endpoint formats
         if "openrouter.ai" in endpoint:
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}]
-            }
+            # OpenRouter supports vision for compatible models
+            if image_data and image_data.startswith('data:image'):
+                payload = {
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": image_data}}
+                        ]
+                    }]
+                }
+            else:
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
         elif "ollama" in endpoint or "11434" in endpoint:
-            payload = {
-                "model": model,
-                "prompt": prompt,
-                "stream": False
-            }
+            # Ollama supports images in some models
+            if image_data and image_data.startswith('data:image'):
+                # Extract base64 data
+                base64_data = image_data.split(',')[1] if ',' in image_data else image_data
+                payload = {
+                    "model": model,
+                    "prompt": prompt,
+                    "images": [base64_data],
+                    "stream": False
+                }
+            else:
+                payload = {
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False
+                }
             print(f"DEBUG: Ollama payload keys: {payload.keys()}")
             print(f"DEBUG: Ollama prompt length: {len(prompt)} chars")
         else:
-            # Generic OpenAI-compatible format
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}]
-            }
+            # Generic OpenAI-compatible format with vision support
+            if image_data and image_data.startswith('data:image'):
+                payload = {
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": image_data}}
+                        ]
+                    }]
+                }
+            else:
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
         
         for attempt in range(max_retries):
             try:
@@ -252,10 +313,10 @@ class ConsensusEngine:
         
         raise Exception(f"Failed after {max_retries} attempts")
     
-    async def call_participant(self, participant_index: int, participant: Union[Dict, Any], prompt: str) -> Dict[str, Any]:
+    async def call_participant(self, participant_index: int, participant: Union[Dict, Any], prompt: str, image_data: str = None) -> Dict[str, Any]:
         """Call a single participant and return structured response"""
         try:
-            response = await self.call_llm(participant, prompt)
+            response = await self.call_llm(participant, prompt, image_data=image_data)
             print(f"DEBUG: Participant {participant_index} response length: {len(response)} chars")
             return {
                 "participant": participant_index,
@@ -270,9 +331,12 @@ class ConsensusEngine:
                 "error": str(e)
             }
     
-    async def call_ranking(self, participant_index: int, participant: Union[Dict, Any], prompt: str, responses: List[Dict]) -> Dict[str, Any]:
+    async def call_ranking(self, participant_index: int, participant: Union[Dict, Any], original_prompt: str, responses: List[Dict]) -> Dict[str, Any]:
         """Call a single participant for ranking and return structured response"""
-        ranking_prompt = f"""Original prompt: {prompt}
+        # Extract just the user's original question without file content for cleaner ranking prompt
+        base_prompt = original_prompt.split("\n\n--- Attached File:")[0] if "--- Attached File:" in original_prompt else original_prompt
+        
+        ranking_prompt = f"""Original prompt: {base_prompt}
 
 Here are 3 responses from different AI models:
 
@@ -301,13 +365,39 @@ Respond ONLY with a JSON object in this exact format:
                 "error": str(e)
             }
     
-    async def run(self, prompt: str, participants: List[Union[Dict, Any]], chairman: Union[Dict, Any]) -> Dict[str, Any]:
+    async def run(self, prompt: str, participants: List[Union[Dict, Any]], chairman: Union[Dict, Any], file_content: Any = None) -> Dict[str, Any]:
         """Run the consensus process with parallel requests"""
+        
+        # Prepare the full prompt with file content if provided
+        full_prompt = prompt
+        image_data = None
+        
+        if file_content:
+            # Check if it's an image file
+            if file_content.type.startswith('image/') and file_content.content.startswith('data:image'):
+                # For images, pass separately to support vision models
+                image_data = file_content.content
+                full_prompt = f"{prompt}\n\n[Analyzing attached image: {file_content.name}]"
+            else:
+                # For text/other files, include in prompt
+                file_info = f"\n\n--- Attached File: {file_content.name} ---\n"
+                
+                if file_content.type.startswith('text/') or file_content.type == 'application/json':
+                    file_info += f"Content:\n{file_content.content}\n"
+                elif file_content.content.startswith('data:'):
+                    # Base64 encoded file (PDF, etc.)
+                    file_info += f"[File Type: {file_content.type}]\n"
+                    file_info += "Note: This is a binary file. Please analyze based on the file type and available context.\n"
+                else:
+                    file_info += f"[File Type: {file_content.type}]\n{file_content.content}\n"
+                
+                file_info += "--- End of File ---\n"
+                full_prompt = prompt + file_info
         
         # Step 1: Get initial responses from all participants IN PARALLEL
         print("Step 1: Getting initial responses (parallel)...")
         response_tasks = [
-            self.call_participant(i, participant, prompt)
+            self.call_participant(i, participant, full_prompt, image_data)
             for i, participant in enumerate(participants)
         ]
         responses = await asyncio.gather(*response_tasks)
@@ -316,16 +406,19 @@ Respond ONLY with a JSON object in this exact format:
         # Step 2: Have each participant rank all responses IN PARALLEL
         print("Step 2: Getting rankings (parallel)...")
         ranking_tasks = [
-            self.call_ranking(i, participant, prompt, responses)
+            self.call_ranking(i, participant, full_prompt, responses)
             for i, participant in enumerate(participants)
         ]
         rankings = await asyncio.gather(*ranking_tasks)
         
         # Step 3: Chairman reviews and creates final output WITH RETRY
         print("Step 3: Chairman creating consensus...")
+        # Use base prompt for chairman (without full file content to keep it concise)
+        base_prompt = prompt if not file_content else f"{prompt}\n[Note: Responses were based on analysis of attached file: {file_content.name}]"
+        
         chairman_prompt = f"""You are the chairman reviewing a consensus process.
 
-Original prompt: {prompt}
+Original prompt: {base_prompt}
 
 Three AI models provided these responses:
 Response A: {responses[0]["response"]}

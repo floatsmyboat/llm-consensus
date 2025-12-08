@@ -1,19 +1,124 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import httpx
+import os
 from consensus import ConsensusEngine
 
-app = FastAPI()
+app = FastAPI(
+    title="LLM Consensus Builder API",
+    description="API for building consensus from multiple LLMs",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
+# Get allowed origins from environment variable or use defaults
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+).split(",")
+
+# CORS Configuration with security restrictions
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ALLOWED_ORIGINS,  # Restrict to specific origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],  # Only allow necessary methods
+    allow_headers=["Content-Type", "Authorization"],  # Only allow necessary headers
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
+
+# Trusted Host Middleware - prevent host header attacks
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "*.localhost"]
+)
+
+# Security Headers Middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+    
+    # Prevent MIME type sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    
+    # Enable XSS protection
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    # Strict Transport Security (HTTPS only - uncomment when using HTTPS)
+    # response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    # Content Security Policy
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://openrouter.ai https://bedrock-runtime.*.amazonaws.com https://bedrock.*.amazonaws.com http://localhost:* http://127.0.0.1:*; "
+        "font-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "upgrade-insecure-requests;"
+    )
+    
+    # Referrer Policy
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    # Permissions Policy (formerly Feature Policy)
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), "
+        "microphone=(), "
+        "camera=(), "
+        "payment=(), "
+        "usb=(), "
+        "magnetometer=(), "
+        "gyroscope=(), "
+        "accelerometer=()"
+    )
+    
+    return response
+
+# Rate limiting helper (basic implementation)
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+request_counts = defaultdict(list)
+RATE_LIMIT = 100  # requests per window
+RATE_WINDOW = timedelta(minutes=15)
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Get client IP
+    client_ip = request.client.host
+    
+    # Clean old requests
+    now = datetime.now()
+    request_counts[client_ip] = [
+        req_time for req_time in request_counts[client_ip]
+        if now - req_time < RATE_WINDOW
+    ]
+    
+    # Check rate limit
+    if len(request_counts[client_ip]) >= RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Please try again later."}
+        )
+    
+    # Add current request
+    request_counts[client_ip].append(now)
+    
+    response = await call_next(request)
+    return response
 
 class LLMConfig(BaseModel):
     endpoint: str
@@ -21,10 +126,16 @@ class LLMConfig(BaseModel):
     api_key: Optional[str] = None
     type: Optional[str] = "openai"  # openai, ollama, bedrock
 
+class FileContent(BaseModel):
+    name: str
+    type: str
+    content: str
+
 class ConsensusRequest(BaseModel):
     prompt: str
     participants: List[LLMConfig]
     chairman: LLMConfig
+    file: Optional[FileContent] = None
 
 class ModelsRequest(BaseModel):
     endpoint_url: str
@@ -38,7 +149,7 @@ async def generate_consensus(request: ConsensusRequest):
         raise HTTPException(status_code=400, detail="Exactly 3 participants required")
     
     engine = ConsensusEngine()
-    result = await engine.run(request.prompt, request.participants, request.chairman)
+    result = await engine.run(request.prompt, request.participants, request.chairman, request.file)
     return result
 
 @app.post("/api/models")
@@ -172,4 +283,21 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    # Get configuration from environment
+    host = os.getenv("HOST", "127.0.0.1")  # Default to localhost only
+    port = int(os.getenv("PORT", "8000"))
+    
+    # Production settings
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        log_level="info",
+        access_log=True,
+        timeout_keep_alive=300,  # 5 minutes for long-running consensus requests
+        timeout_graceful_shutdown=30,
+        # For production with HTTPS:
+        # ssl_keyfile="path/to/key.pem",
+        # ssl_certfile="path/to/cert.pem",
+    )

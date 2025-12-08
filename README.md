@@ -9,6 +9,8 @@ A web application that forms consensus from multiple LLMs by having them review 
 ## ✨ Features
 
 - **Multi-LLM Consensus** - Query 3 different LLMs simultaneously and synthesize their responses
+- **File Upload Support** - Attach text files, images, JSON, CSV, and more for analysis
+- **Vision Model Support** - Automatic image analysis with Claude, GPT-4V, and other vision models
 - **Peer Review System** - Each LLM ranks all responses for quality and accuracy
 - **Chairman Synthesis** - A designated LLM creates the final consensus from all inputs
 - **Parallel Processing** - All LLM requests run concurrently for 3x faster results
@@ -124,8 +126,12 @@ In the configuration page:
 ### 3. Generate Consensus
 
 1. Enter your prompt
-2. Click "Generate Consensus"
-3. View results in tabs:
+2. (Optional) Upload a file to analyze:
+   - **Text files**: .txt, .md, .json, .csv - Content included in prompt
+   - **Images**: .png, .jpg, .jpeg - Sent to vision-capable models
+   - **Documents**: .pdf, .doc, .docx - Metadata included
+3. Click "Generate Consensus"
+4. View results in tabs:
    - **Initial Responses** - See what each LLM said
    - **Rankings** - How each LLM ranked the responses
    - **Final Consensus** - The chairman's synthesis
@@ -133,7 +139,9 @@ In the configuration page:
 ## 📊 Example Use Cases
 
 - **Research Questions** - Get multiple perspectives on complex topics
-- **Code Review** - Have multiple LLMs review and rank code solutions
+- **Code Review** - Upload code files and have multiple LLMs review and rank solutions
+- **Image Analysis** - Upload images for multi-model visual analysis and consensus
+- **Document Analysis** - Upload text files, JSON, CSV for comprehensive review
 - **Content Creation** - Generate and refine content through consensus
 - **Decision Making** - Evaluate options from multiple AI viewpoints
 - **Fact Checking** - Cross-reference information across models
@@ -187,7 +195,12 @@ Generate consensus from multiple LLMs
     {"endpoint": "...", "model": "...", "api_key": "...", "type": "ollama"},
     {"endpoint": "...", "model": "...", "api_key": "...", "type": "bedrock"}
   ],
-  "chairman": {"endpoint": "...", "model": "...", "api_key": "..."}
+  "chairman": {"endpoint": "...", "model": "...", "api_key": "..."},
+  "file": {
+    "name": "example.txt",
+    "type": "text/plain",
+    "content": "file content or base64 data"
+  }
 }
 ```
 
@@ -226,6 +239,27 @@ MIT License - see LICENSE file for details
 - [AWS Bedrock Setup Guide](BEDROCK_SETUP.md)
 - [API Documentation](http://localhost:8000/docs) (when backend is running)
 
+## 🔒 Security
+
+This application implements multiple security layers:
+
+- **CORS Protection** - Restricted origins
+- **Security Headers** - XSS, clickjacking, MIME sniffing protection
+- **Rate Limiting** - 100 requests per 15 minutes per IP
+- **Input Validation** - All inputs validated with Pydantic
+- **Session Storage Option** - API keys can auto-clear on browser close
+- **No Server-Side Storage** - API keys never stored on backend
+
+See [SECURITY.md](SECURITY.md) for detailed security information.
+
+### Environment Configuration
+
+```bash
+# Backend configuration
+cp backend/.env.example backend/.env
+# Edit ALLOWED_ORIGINS for your domain
+```
+
 ## 🐛 Troubleshooting
 
 **Backend won't start:**
@@ -252,6 +286,8 @@ MIT License - see LICENSE file for details
 
 ## 🔮 Future Enhancements
 
+- [x] File upload support (text, images, documents)
+- [x] Vision model support for image analysis
 - [ ] Support for more LLM providers (Anthropic, OpenAI direct, etc.)
 - [ ] Custom ranking criteria
 - [ ] Export results to markdown/PDF
@@ -259,3 +295,5 @@ MIT License - see LICENSE file for details
 - [ ] Batch processing
 - [ ] Cost tracking
 - [ ] Model performance analytics
+- [ ] PDF text extraction
+- [ ] Audio file transcription and analysis

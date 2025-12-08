@@ -112,6 +112,10 @@ function ConfigPage({ onSave, onCancel, initialConfig }) {
     return endpoint?.models || []
   }
 
+  const [useSessionStorage, setUseSessionStorage] = useState(
+    localStorage.getItem('llm-consensus-use-session') === 'true'
+  )
+
   const handleSave = () => {
     const config = { 
       endpoints: endpoints.map((endpoint, index) => ({
@@ -121,7 +125,11 @@ function ConfigPage({ onSave, onCancel, initialConfig }) {
       participants,
       chairman
     }
-    onSave(config)
+    
+    // Save storage preference
+    localStorage.setItem('llm-consensus-use-session', useSessionStorage.toString())
+    
+    onSave(config, useSessionStorage)
   }
 
   return (
@@ -135,6 +143,26 @@ function ConfigPage({ onSave, onCancel, initialConfig }) {
       </div>
 
       {error && <div className="error">{error}</div>}
+
+      <div className="config-section" style={{ marginBottom: '1.5rem' }}>
+        <h2>Security Settings</h2>
+        <div className="form-group">
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={useSessionStorage}
+              onChange={(e) => setUseSessionStorage(e.target.checked)}
+              style={{ width: 'auto', cursor: 'pointer' }}
+            />
+            Use session storage (more secure - clears API keys when browser closes)
+          </label>
+          <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '0.5rem', marginLeft: '1.5rem' }}>
+            {useSessionStorage 
+              ? '🔒 API keys will be cleared when you close the browser tab'
+              : '💾 API keys will persist between sessions (less secure on shared computers)'}
+          </p>
+        </div>
+      </div>
 
       <div className="endpoints-list">
         {endpoints.map((endpoint, index) => (
